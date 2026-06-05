@@ -47,34 +47,60 @@ imap = ImapClient(
 syncer = Syncer(settings, imap, index)
 
 _ACTOR = "hermes"
-_scheduler_stop = threading.Event()
+_worker_stop = threading.Event()
+_last_incremental: dict[str, object] = {"result": None, "at": None}
 
 
-def _scheduler_loop() -> None:
+def _run_incremental(trigger: str) -> None:
+    try:
+        result = syncer.incremental(settings.sync.folders)
+        _last_incremental["result"] = result
+        audit.record(
+            actor="worker",
+            token_id="internal",
+            operation="incremental_sync",
+            trigger=trigger,
+            **result,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Incremental sync (%s) failed: %s", trigger, exc)
+
+
+def _poll_loop() -> None:
     interval = settings.sync.interval_minutes * 60
-    log.info("Scheduled sync worker enabled: every %d min", settings.sync.interval_minutes)
-    while not _scheduler_stop.wait(interval):
-        try:
-            result = syncer.sync(settings.sync.default_days, settings.sync.folders)
-            audit.record(
-                actor="scheduler",
-                token_id="internal",
-                operation="sync",
-                **result,
-            )
-        except Exception as exc:  # noqa: BLE001
-            log.warning("Scheduled sync failed: %s", exc)
+    log.info("Poll sync worker enabled: every %d min", settings.sync.interval_minutes)
+    while not _worker_stop.wait(interval):
+        _run_incremental("poll")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("bott-mail-service %s starting (read-only)", __version__)
-    thread = None
+    watchers = []
     if settings.sync.interval_minutes > 0:
-        thread = threading.Thread(target=_scheduler_loop, daemon=True)
-        thread.start()
+        if settings.sync.mode == "idle":
+            from .idle import IdleWatcher
+
+            refresh = settings.sync.interval_minutes * 60
+            for folder in settings.sync.idle_folders:
+                w = IdleWatcher(
+                    imap, folder,
+                    on_event=lambda: _run_incremental("idle"),
+                    stop_event=_worker_stop,
+                    refresh_seconds=refresh,
+                )
+                w.start()
+                watchers.append(w)
+            log.info(
+                "IDLE sync enabled on %s (refresh every %d min)",
+                settings.sync.idle_folders, settings.sync.interval_minutes,
+            )
+        else:
+            threading.Thread(target=_poll_loop, daemon=True).start()
+    else:
+        log.info("Background sync worker disabled (interval_minutes=0)")
     yield
-    _scheduler_stop.set()
+    _worker_stop.set()
     log.info("bott-mail-service stopping")
 
 

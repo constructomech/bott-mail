@@ -1,6 +1,7 @@
 """SQLite-backed message index with FTS5 full-text search."""
 from __future__ import annotations
 
+import glob
 import hashlib
 import json
 import os
@@ -11,8 +12,8 @@ from datetime import datetime, timedelta, timezone
 
 from .mail_parse import ParsedMessage, make_snippet
 
-_MIGRATION = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "migrations", "001_initial.sql"
+_MIGRATIONS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "migrations"
 )
 
 
@@ -43,10 +44,10 @@ class MessageIndex:
         return conn
 
     def _init_db(self) -> None:
-        with open(_MIGRATION) as f:
-            schema = f.read()
         with self._lock, self._connect() as conn:
-            conn.executescript(schema)
+            for path in sorted(glob.glob(os.path.join(_MIGRATIONS_DIR, "*.sql"))):
+                with open(path) as f:
+                    conn.executescript(f.read())
 
     # ---- writes -------------------------------------------------------
 
@@ -62,6 +63,7 @@ class MessageIndex:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         with self._lock, self._connect() as conn:
             for uid, msg, unread, flagged in parsed:
+                uid = str(uid)
                 mid = stable_id(self._account, folder, uid)
                 body_sha = hashlib.sha256(msg.body_text.encode()).hexdigest()
                 snippet = make_snippet(msg.body_text)
@@ -211,6 +213,61 @@ class MessageIndex:
         if row is None:
             return None
         return self._row_to_detail(row)
+
+    # ---- folder sync state -------------------------------------------
+
+    def get_folder_state(self, folder: str) -> tuple[int | None, int]:
+        """Return (uidvalidity, last_uid) for a folder; defaults (None, 0)."""
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT uidvalidity, last_uid FROM folder_state"
+                " WHERE account = ? AND folder = ?",
+                (self._account, folder),
+            ).fetchone()
+        if row is None:
+            return (None, 0)
+        return (row["uidvalidity"], row["last_uid"])
+
+    def set_folder_state(self, folder: str, uidvalidity: int, last_uid: int) -> None:
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO folder_state (account, folder, uidvalidity, last_uid, updated_at)
+                VALUES (?,?,?,?,?)
+                ON CONFLICT(account, folder) DO UPDATE SET
+                  uidvalidity=excluded.uidvalidity,
+                  last_uid=excluded.last_uid,
+                  updated_at=excluded.updated_at
+                """,
+                (self._account, folder, uidvalidity, last_uid, now),
+            )
+
+    def update_flags(
+        self, folder: str, flags: dict[int, tuple[bool, bool]]
+    ) -> int:
+        """Update unread/flagged for existing messages by uid. Returns #changed."""
+        if not flags:
+            return 0
+        changed = 0
+        with self._lock, self._connect() as conn:
+            for uid, (unread, flagged) in flags.items():
+                cur = conn.execute(
+                    "UPDATE messages SET unread=?, flagged=?"
+                    " WHERE account=? AND folder=? AND uid=?"
+                    " AND (unread<>? OR flagged<>?)",
+                    (
+                        1 if unread else 0,
+                        1 if flagged else 0,
+                        self._account,
+                        folder,
+                        str(uid),
+                        1 if unread else 0,
+                        1 if flagged else 0,
+                    ),
+                )
+                changed += cur.rowcount
+        return changed
 
     # ---- helpers ------------------------------------------------------
 

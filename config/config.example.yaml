@@ -25,8 +25,15 @@ sync:
     - Sent
     - Drafts
     - All Mail
-  # Background sync interval in minutes (0 disables the scheduled worker).
-  interval_minutes: 10
+  # Background sync worker.
+  #   mode: idle  -> IMAP IDLE push (near-instant new mail) + periodic refresh
+  #   mode: poll  -> simple periodic incremental sync
+  # interval_minutes is the refresh/poll cadence (also the IDLE keepalive).
+  # 0 disables the background worker entirely.
+  mode: idle
+  interval_minutes: 5
+  idle_folders:
+    - INBOX
 
 storage:
   sqlite_path: /data/data/mail.sqlite

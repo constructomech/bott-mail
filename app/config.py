@@ -7,6 +7,7 @@ Bridge IMAP credentials) are always read from the environment.
 """
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 
@@ -44,7 +45,9 @@ class SyncConfig:
     exclude_folders: list[str] = field(
         default_factory=lambda: ["Trash", "Spam", "Sent", "Drafts", "All Mail"]
     )
-    interval_minutes: int = 0  # 0 disables the scheduled sync worker
+    interval_minutes: int = 0  # poll/refresh cadence; 0 disables the worker
+    mode: str = "idle"  # "idle" (push + periodic refresh) or "poll"
+    idle_folders: list[str] = field(default_factory=lambda: ["INBOX"])
 
 
 @dataclass
@@ -81,9 +84,16 @@ class Settings:
     def from_env(cls) -> "Settings":
         config_path = os.environ.get("BOTT_MAIL_CONFIG", "")
         raw: dict = {}
-        if config_path and os.path.exists(config_path):
-            with open(config_path) as f:
-                raw = yaml.safe_load(f) or {}
+        if config_path:
+            if os.path.exists(config_path):
+                with open(config_path) as f:
+                    raw = yaml.safe_load(f) or {}
+            else:
+                # Fail loud rather than silently running on defaults.
+                logging.getLogger("bott-mail").warning(
+                    "BOTT_MAIL_CONFIG=%s does not exist; using built-in defaults.",
+                    config_path,
+                )
 
         server_raw = raw.get("server", {}) or {}
         server = ServerConfig(
@@ -127,6 +137,8 @@ class Settings:
             interval_minutes=int(
                 sync_raw.get("interval_minutes", SyncConfig.interval_minutes)
             ),
+            mode=str(sync_raw.get("mode", SyncConfig.mode)).lower(),
+            idle_folders=list(sync_raw.get("idle_folders", ["INBOX"])),
         )
 
         storage_raw = raw.get("storage", {}) or {}

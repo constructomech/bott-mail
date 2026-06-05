@@ -60,3 +60,31 @@ def test_stable_id_deterministic():
     a = stable_id("acct", "INBOX", "5")
     b = stable_id("acct", "INBOX", "5")
     assert a == b and len(a) == 64
+
+
+def test_folder_state_roundtrip(tmp_db):
+    idx = MessageIndex(tmp_db, account="test")
+    assert idx.get_folder_state("INBOX") == (None, 0)
+    idx.set_folder_state("INBOX", uidvalidity=12345, last_uid=42)
+    assert idx.get_folder_state("INBOX") == (12345, 42)
+    idx.set_folder_state("INBOX", uidvalidity=12345, last_uid=99)
+    assert idx.get_folder_state("INBOX") == (12345, 99)
+
+
+def test_update_flags(tmp_db, sample_eml):
+    idx = MessageIndex(tmp_db, account="test")
+    pm = parse_email(sample_eml)
+    idx.upsert_messages("INBOX", [("7", pm, True, False)])
+    changed = idx.update_flags("INBOX", {7: (False, True)})
+    assert changed == 1
+    mid = stable_id("test", "INBOX", "7")
+    assert idx.get_message(mid)["unread"] is False
+    assert idx.update_flags("INBOX", {7: (False, True)}) == 0
+
+
+def test_uid_coerced_to_str(tmp_db, sample_eml):
+    idx = MessageIndex(tmp_db, account="test")
+    pm = parse_email(sample_eml)
+    idx.upsert_messages("INBOX", [(7, pm, True, False)])  # int uid
+    mid = stable_id("test", "INBOX", "7")  # str uid
+    assert idx.get_message(mid) is not None
