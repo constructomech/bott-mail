@@ -1,0 +1,43 @@
+# bott-mail-service configuration (Phase 1, read-only).
+# Sensitive values are referenced by ENV VAR NAME so secrets never live here.
+
+server:
+  host: 0.0.0.0
+  port: 8080
+
+auth:
+  read_token_env: BOTT_MAIL_READ_TOKEN
+
+imap:
+  host_env: PROTON_BRIDGE_IMAP_HOST
+  port_env: PROTON_BRIDGE_IMAP_PORT
+  username_env: PROTON_BRIDGE_IMAP_USERNAME
+  password_env: PROTON_BRIDGE_IMAP_PASSWORD
+  tls: false
+
+sync:
+  default_days: 30
+  folders:
+    - INBOX
+  exclude_folders:
+    - Trash
+    - Spam
+    - Sent
+    - Drafts
+    - All Mail
+  # Background sync interval in minutes (0 disables the scheduled worker).
+  interval_minutes: 10
+
+storage:
+  sqlite_path: /data/data/mail.sqlite
+  audit_log: /data/data/audit.log
+
+safety:
+  allow_send: false
+  allow_delete: false
+  allow_archive: false
+  allow_label: false
+  expose_raw_html: false
+  max_body_chars: 12000
+  max_results: 25
+  max_sync_days: 365

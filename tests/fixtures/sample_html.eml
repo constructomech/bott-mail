@@ -1,0 +1,16 @@
+From: Shop Shipping <ship@store.example.com>
+To: user@proton.me
+Subject: Your order has shipped
+Date: Tue, 02 Jun 2026 08:00:00 +0000
+Message-ID: <ship987@store.example.com>
+MIME-Version: 1.0
+Content-Type: text/html; charset="utf-8"
+
+<html>
+<head><style>.x{color:red}</style><title>ignore me</title></head>
+<body>
+<script>alert('untrusted');</script>
+<p>Hi, your <b>shipping</b> notification is ready.</p>
+<p>Track it here: <a href="https://track.example.com/xyz">Track package</a></p>
+</body>
+</html>

@@ -1,0 +1,39 @@
+# Combined bott-mail container: Proton Bridge + bott-mail-service.
+# Copy to docker-compose.yml and adjust paths/secrets for your host.
+services:
+  bott-mail:
+    image: ghcr.io/constructomech/bott-mail:latest
+    container_name: bott-mail
+    restart: unless-stopped
+    environment:
+      BOTT_MAIL_CONFIG: /data/config/config.yaml
+      BOTT_MAIL_READ_TOKEN: ${BOTT_MAIL_READ_TOKEN}
+
+      # Proton Bridge IMAP credentials are the BRIDGE-specific credentials
+      # shown by the Bridge `info` command (NOT your Proton account password).
+      # These are owned by this container only and never given to Hermes.
+      PROTON_BRIDGE_IMAP_HOST: 127.0.0.1
+      PROTON_BRIDGE_IMAP_PORT: "1143"
+      PROTON_BRIDGE_IMAP_USERNAME: ${PROTON_BRIDGE_IMAP_USERNAME}
+      PROTON_BRIDGE_IMAP_PASSWORD: ${PROTON_BRIDGE_IMAP_PASSWORD}
+
+    volumes:
+      - /mnt/user/appdata/bott-mail:/data
+
+    networks:
+      - mail_api
+
+    # Expose ONLY the service API to other containers on mail_api.
+    # Do NOT publish Proton Bridge IMAP (1143) or SMTP (1025).
+    expose:
+      - "8080"
+
+    # Optional, debugging only — bind to host localhost, never 0.0.0.0:
+    # ports:
+    #   - "127.0.0.1:8080:8080"
+
+networks:
+  # Shared network with Hermes. Create once with:
+  #   docker network create mail_api
+  mail_api:
+    external: true

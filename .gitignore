@@ -216,3 +216,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- bott-mail specific ---
+.env
+*.env
+!.env.example
+data/
+config/config.yaml
+*.sqlite-wal
+*.sqlite-shm
+audit.log
+.venv/

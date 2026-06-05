@@ -1,0 +1,15 @@
+From: Acme Insurance <notices@insurance.example.com>
+To: user@proton.me
+Subject: Your insurance renewal notice
+Date: Wed, 03 Jun 2026 10:12:00 +0000
+Message-ID: <abc123@insurance.example.com>
+Content-Type: text/plain; charset="utf-8"
+
+Hello,
+
+Your policy renewal is due on July 1, 2026. The renewal amount is $452.00.
+
+Please review your coverage before the renewal date.
+
+Thanks,
+Acme Insurance
