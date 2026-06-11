@@ -56,6 +56,22 @@ def test_get_message_detail(tmp_db, sample_eml):
     assert detail["cc"] == []
 
 
+def test_message_locator_and_mark_archived(tmp_db, sample_eml):
+    idx = _index_sample(tmp_db, sample_eml, uid="11", folder="INBOX")
+    mid = stable_id("test", "INBOX", "11")
+    locator = idx.get_message_locator(mid)
+    assert locator == {
+        "id": mid,
+        "folder": "INBOX",
+        "uid": "11",
+        "subject": "Your insurance renewal notice",
+        "from": "notices@insurance.example.com",
+    }
+
+    assert idx.mark_archived(mid, "Archive") is True
+    assert idx.get_message(mid)["folder"] == "Archive"
+
+
 def test_stable_id_deterministic():
     a = stable_id("acct", "INBOX", "5")
     b = stable_id("acct", "INBOX", "5")

@@ -57,6 +57,13 @@ class StorageConfig:
 
 
 @dataclass
+class AuthTokenConfig:
+    token_id: str
+    token: str
+    scopes: list[str]
+
+
+@dataclass
 class SafetyConfig:
     # Phase 1 is read-only. These flags exist so the service can *refuse*
     # write operations even if endpoints are added later by mistake.
@@ -68,6 +75,7 @@ class SafetyConfig:
     max_body_chars: int = 12000
     max_results: int = 25
     max_sync_days: int = 365
+    archive_folder: str = "Archive"
 
 
 @dataclass
@@ -77,7 +85,7 @@ class Settings:
     sync: SyncConfig
     storage: StorageConfig
     safety: SafetyConfig
-    read_token: str
+    auth_tokens: list[AuthTokenConfig]
     account: str = "default"
 
     @classmethod
@@ -101,14 +109,7 @@ class Settings:
             port=int(server_raw.get("port", ServerConfig.port)),
         )
 
-        auth_raw = raw.get("auth", {}) or {}
-        read_token_env = auth_raw.get("read_token_env", "BOTT_MAIL_READ_TOKEN")
-        read_token = os.environ.get(read_token_env, "")
-        if not read_token:
-            raise ValueError(
-                f"Read token env var {read_token_env!r} is empty; "
-                "set BOTT_MAIL_READ_TOKEN (or the configured env name)."
-            )
+        auth_tokens = _load_auth_tokens(raw.get("auth", {}) or {})
 
         imap_raw = raw.get("imap", {}) or {}
         imap = ImapConfig(
@@ -161,6 +162,9 @@ class Settings:
             max_sync_days=int(
                 safety_raw.get("max_sync_days", SafetyConfig.max_sync_days)
             ),
+            archive_folder=str(
+                safety_raw.get("archive_folder", SafetyConfig.archive_folder)
+            ),
         )
 
         return cls(
@@ -169,6 +173,37 @@ class Settings:
             sync=sync,
             storage=storage,
             safety=safety,
-            read_token=read_token,
+            auth_tokens=auth_tokens,
             account=raw.get("account", "default"),
         )
+
+
+def _load_auth_tokens(auth_raw: dict) -> list[AuthTokenConfig]:
+    tokens_raw = auth_raw.get("tokens") or []
+    tokens: list[AuthTokenConfig] = []
+
+    for item in tokens_raw:
+        token_id = str(item.get("id", "")).strip()
+        token_env = str(item.get("token_env", item.get("env", ""))).strip()
+        scopes = [str(s).strip() for s in item.get("scopes", []) if str(s).strip()]
+        token = os.environ.get(token_env, "") if token_env else ""
+        if token_id and token and scopes:
+            tokens.append(AuthTokenConfig(token_id=token_id, token=token, scopes=scopes))
+
+    # Legacy config support while the deployment migrates to auth.tokens.
+    read_token_env = auth_raw.get("read_token_env", "BOTT_MAIL_READ_TOKEN")
+    read_token = os.environ.get(read_token_env, "")
+    if read_token:
+        tokens.append(
+            AuthTokenConfig(
+                token_id="read_default",
+                token=read_token,
+                scopes=["sync:run", "messages:search", "messages:read"],
+            )
+        )
+
+    if not tokens:
+        raise ValueError(
+            "No auth tokens configured. Set auth.tokens or BOTT_MAIL_READ_TOKEN."
+        )
+    return tokens

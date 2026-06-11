@@ -6,7 +6,17 @@ server:
   port: 8080
 
 auth:
-  read_token_env: BOTT_MAIL_READ_TOKEN
+  tokens:
+    - id: hermes-read
+      token_env: BOTT_MAIL_HERMES_READ_TOKEN
+      scopes:
+        - sync:run
+        - messages:search
+        - messages:read
+    - id: archive-worker
+      token_env: BOTT_MAIL_ARCHIVE_TOKEN
+      scopes:
+        - messages:archive
 
 imap:
   host_env: PROTON_BRIDGE_IMAP_HOST
@@ -44,6 +54,7 @@ safety:
   allow_delete: false
   allow_archive: false
   allow_label: false
+  archive_folder: Archive
   expose_raw_html: false
   max_body_chars: 12000
   max_results: 25

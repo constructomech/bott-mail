@@ -5,8 +5,8 @@ Supports:
   - lightweight flag-only refresh (read/unread, flagged) for a recent window
   - IMAP IDLE for near-instant new-mail notifications
 
-Only read operations are used: SELECT (readonly), SEARCH, FETCH, IDLE. No
-STORE/COPY/MOVE/EXPUNGE are ever issued.
+Write operations are only added behind service-level policy gates. Archive uses
+IMAP MOVE only; there is intentionally no copy+delete fallback.
 """
 from __future__ import annotations
 
@@ -148,6 +148,20 @@ class ImapClient:
                         b"\\Flagged" in flags,
                     )
             return out
+        finally:
+            try:
+                client.logout()
+            except Exception:  # noqa: BLE001
+                pass
+
+    # -- mutations ------------------------------------------------------
+
+    def archive_message(self, folder: str, uid: str, archive_folder: str) -> None:
+        """Move one message to the archive folder using UID MOVE only."""
+        client = self.connect()
+        try:
+            client.select_folder(folder, readonly=False)
+            client.move([int(uid)], archive_folder)
         finally:
             try:
                 client.logout()

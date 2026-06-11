@@ -80,3 +80,10 @@ class MessageDetail(BaseModel):
 class MessageResponse(BaseModel):
     ok: bool = True
     message: MessageDetail
+
+
+class ArchiveResponse(BaseModel):
+    ok: bool = True
+    message_id: str
+    from_folder: str
+    archive_folder: str

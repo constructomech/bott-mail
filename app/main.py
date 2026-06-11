@@ -10,12 +10,13 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 
 from . import __version__
 from .audit import AuditLog
-from .auth import TokenAuth, make_dependency
+from .auth import AuthContext, TokenAuth, TokenSpec, require_scope
 from .config import Settings
 from .imap_client import ImapClient
 from .index import MessageIndex
 from .models import (
     HealthResponse,
+    ArchiveResponse,
     MessageDetail,
     MessageResponse,
     RecentResponse,
@@ -24,7 +25,14 @@ from .models import (
     SyncRequest,
     SyncResponse,
 )
-from .safety import assert_read_only, clamp_body, clamp_days, clamp_limit
+from .safety import (
+    PolicyError,
+    assert_archive_allowed,
+    assert_read_only,
+    clamp_body,
+    clamp_days,
+    clamp_limit,
+)
 from .sync import Syncer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
@@ -33,8 +41,20 @@ log = logging.getLogger("bott-mail")
 settings = Settings.from_env()
 assert_read_only(settings.safety)
 
-auth = TokenAuth(settings.read_token)
-require_token = make_dependency(auth)
+auth = TokenAuth(
+    [
+        TokenSpec(
+            token_id=t.token_id,
+            token=t.token,
+            scopes=frozenset(t.scopes),
+        )
+        for t in settings.auth_tokens
+    ]
+)
+require_sync = require_scope(auth, "sync:run")
+require_search = require_scope(auth, "messages:search")
+require_read = require_scope(auth, "messages:read")
+require_archive = require_scope(auth, "messages:archive")
 audit = AuditLog(settings.storage.audit_log)
 index = MessageIndex(settings.storage.sqlite_path, account=settings.account)
 imap = ImapClient(
@@ -116,24 +136,24 @@ async def health() -> HealthResponse:
 
 
 @app.post("/sync", response_model=SyncResponse)
-async def sync(req: SyncRequest, token_id: str = Depends(require_token)) -> SyncResponse:
+async def sync(req: SyncRequest, auth_ctx: AuthContext = Depends(require_sync)) -> SyncResponse:
     days = clamp_days(req.days, settings.sync.default_days, settings.safety)
     folders = req.folders or settings.sync.folders
     result = syncer.sync(days, folders)
-    audit.record(actor=_ACTOR, token_id=token_id, operation="sync", days=days, **result)
+    audit.record(actor=_ACTOR, token_id=auth_ctx.token_id, operation="sync", days=days, **result)
     return SyncResponse(**result)
 
 
 @app.post("/search", response_model=SearchResponse)
 async def search(
-    req: SearchRequest, token_id: str = Depends(require_token)
+    req: SearchRequest, auth_ctx: AuthContext = Depends(require_search)
 ) -> SearchResponse:
     days = clamp_days(req.days, 90, settings.safety)
     limit = clamp_limit(req.limit, settings.safety)
     rows = index.search(req.query, days=days, limit=limit)
     audit.record(
         actor=_ACTOR,
-        token_id=token_id,
+        token_id=auth_ctx.token_id,
         operation="search",
         query=req.query,
         result_count=len(rows),
@@ -146,14 +166,14 @@ async def recent(
     days: int = Query(default=1, ge=1),
     unread: bool = Query(default=False),
     limit: int = Query(default=10, ge=1),
-    token_id: str = Depends(require_token),
+    auth_ctx: AuthContext = Depends(require_search),
 ) -> RecentResponse:
     days_c = clamp_days(days, settings.sync.default_days, settings.safety)
     limit_c = clamp_limit(limit, settings.safety)
     rows = index.recent(days=days_c, limit=limit_c, unread_only=unread)
     audit.record(
         actor=_ACTOR,
-        token_id=token_id,
+        token_id=auth_ctx.token_id,
         operation="recent",
         days=days_c,
         unread_only=unread,
@@ -164,7 +184,7 @@ async def recent(
 
 @app.get("/messages/{message_id}", response_model=MessageResponse)
 async def get_message(
-    message_id: str, token_id: str = Depends(require_token)
+    message_id: str, auth_ctx: AuthContext = Depends(require_read)
 ) -> MessageResponse:
     row = index.get_message(message_id)
     if row is None:
@@ -172,8 +192,67 @@ async def get_message(
     row["text"] = clamp_body(row.get("text") or "", settings.safety)
     audit.record(
         actor=_ACTOR,
-        token_id=token_id,
+        token_id=auth_ctx.token_id,
         operation="message_read",
         message_id=message_id,
     )
     return MessageResponse(message=MessageDetail(**row))
+
+
+@app.post("/messages/{message_id}/archive", response_model=ArchiveResponse)
+async def archive_message(
+    message_id: str, auth_ctx: AuthContext = Depends(require_archive)
+) -> ArchiveResponse:
+    try:
+        assert_archive_allowed(settings.safety)
+    except PolicyError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    row = index.get_message_locator(message_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    archive_folder = settings.safety.archive_folder
+    from_folder = row["folder"]
+    if from_folder == archive_folder:
+        audit.record(
+            actor=_ACTOR,
+            token_id=auth_ctx.token_id,
+            operation="archive_noop",
+            message_id=message_id,
+            folder=from_folder,
+        )
+        return ArchiveResponse(
+            message_id=message_id,
+            from_folder=from_folder,
+            archive_folder=archive_folder,
+        )
+
+    try:
+        imap.archive_message(from_folder, row["uid"], archive_folder)
+    except Exception as exc:  # noqa: BLE001
+        audit.record(
+            actor=_ACTOR,
+            token_id=auth_ctx.token_id,
+            operation="archive_failed",
+            message_id=message_id,
+            from_folder=from_folder,
+            archive_folder=archive_folder,
+            error=type(exc).__name__,
+        )
+        raise HTTPException(status_code=502, detail="IMAP archive failed") from exc
+
+    index.mark_archived(message_id, archive_folder)
+    audit.record(
+        actor=_ACTOR,
+        token_id=auth_ctx.token_id,
+        operation="archive",
+        message_id=message_id,
+        from_folder=from_folder,
+        archive_folder=archive_folder,
+    )
+    return ArchiveResponse(
+        message_id=message_id,
+        from_folder=from_folder,
+        archive_folder=archive_folder,
+    )

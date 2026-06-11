@@ -28,12 +28,19 @@ class PolicyError(Exception):
 
 
 def assert_read_only(safety: SafetyConfig) -> None:
-    """Verify the service is configured read-only. Called at startup."""
+    """Verify forbidden capabilities are disabled. Called at startup."""
     if safety.allow_send or safety.allow_delete:
         raise PolicyError(
             "allow_send/allow_delete must be false; send and delete are never "
             "supported by bott-mail-service."
         )
+
+
+def assert_archive_allowed(safety: SafetyConfig) -> None:
+    if not safety.allow_archive:
+        raise PolicyError("Archive is disabled by safety.allow_archive=false")
+    if not safety.archive_folder.strip():
+        raise PolicyError("Archive folder is not configured")
 
 
 def clamp_limit(requested: int | None, safety: SafetyConfig) -> int:

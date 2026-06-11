@@ -214,6 +214,32 @@ class MessageIndex:
             return None
         return self._row_to_detail(row)
 
+    def get_message_locator(self, message_id: str) -> dict | None:
+        """Return the IMAP location for a message without body content."""
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT id, folder, uid, subject, from_addr FROM messages WHERE id = ?",
+                (message_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row["id"],
+            "folder": row["folder"],
+            "uid": row["uid"],
+            "subject": row["subject"],
+            "from": row["from_addr"],
+        }
+
+    def mark_archived(self, message_id: str, archive_folder: str) -> bool:
+        """Reflect a successful IMAP archive in the local index."""
+        with self._lock, self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE messages SET folder = ?, unread = 0 WHERE id = ?",
+                (archive_folder, message_id),
+            )
+            return cur.rowcount > 0
+
     # ---- folder sync state -------------------------------------------
 
     def get_folder_state(self, folder: str) -> tuple[int | None, int]:
