@@ -190,20 +190,6 @@ def _load_auth_tokens(auth_raw: dict) -> list[AuthTokenConfig]:
         if token_id and token and scopes:
             tokens.append(AuthTokenConfig(token_id=token_id, token=token, scopes=scopes))
 
-    # Legacy config support while the deployment migrates to auth.tokens.
-    read_token_env = auth_raw.get("read_token_env", "BOTT_MAIL_READ_TOKEN")
-    read_token = os.environ.get(read_token_env, "")
-    if read_token:
-        tokens.append(
-            AuthTokenConfig(
-                token_id="read_default",
-                token=read_token,
-                scopes=["sync:run", "messages:search", "messages:read"],
-            )
-        )
-
     if not tokens:
-        raise ValueError(
-            "No auth tokens configured. Set auth.tokens or BOTT_MAIL_READ_TOKEN."
-        )
+        raise ValueError("No auth tokens configured. Set auth.tokens.")
     return tokens
