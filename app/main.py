@@ -242,7 +242,7 @@ async def archive_message(
         )
         raise HTTPException(status_code=502, detail="IMAP archive failed") from exc
 
-    index.mark_archived(message_id, archive_folder)
+    index.remove_message(message_id)
     audit.record(
         actor=_ACTOR,
         token_id=auth_ctx.token_id,

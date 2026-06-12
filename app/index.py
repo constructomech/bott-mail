@@ -231,13 +231,16 @@ class MessageIndex:
             "from": row["from_addr"],
         }
 
-    def mark_archived(self, message_id: str, archive_folder: str) -> bool:
-        """Reflect a successful IMAP archive in the local index."""
+    def remove_message(self, message_id: str) -> bool:
+        """Remove a message from the local index after it leaves a synced folder."""
         with self._lock, self._connect() as conn:
-            cur = conn.execute(
-                "UPDATE messages SET folder = ?, unread = 0 WHERE id = ?",
-                (archive_folder, message_id),
-            )
+            row = conn.execute(
+                "SELECT rowid FROM messages WHERE id = ?", (message_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            conn.execute("DELETE FROM messages_fts WHERE rowid = ?", (row["rowid"],))
+            cur = conn.execute("DELETE FROM messages WHERE id = ?", (message_id,))
             return cur.rowcount > 0
 
     # ---- folder sync state -------------------------------------------
