@@ -11,12 +11,17 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from . import __version__
 from .audit import AuditLog
 from .auth import AuthContext, TokenAuth, TokenSpec, require_scope
+from .automation import AutomationStore, validate_recommendation
 from .config import Settings
+from .hermes import HermesWebhookClient, HermesWebhookConfig, HermesWebhookError
 from .imap_client import ImapClient
 from .index import MessageIndex
 from .models import (
     HealthResponse,
     ArchiveResponse,
+    AutomationRecommendationRequest,
+    AutomationRecommendationResponse,
+    AutomationClassifyResponse,
     MessageDetail,
     MessageResponse,
     RecentResponse,
@@ -55,8 +60,18 @@ require_sync = require_scope(auth, "sync:run")
 require_search = require_scope(auth, "messages:search")
 require_read = require_scope(auth, "messages:read")
 require_archive = require_scope(auth, "messages:archive")
+require_recommend = require_scope(auth, "automation:recommend")
+require_classify = require_scope(auth, "automation:classify")
 audit = AuditLog(settings.storage.audit_log)
 index = MessageIndex(settings.storage.sqlite_path, account=settings.account)
+automation_store = AutomationStore(settings.storage.sqlite_path, account=settings.account)
+hermes_webhook = HermesWebhookClient(
+    HermesWebhookConfig(
+        url=settings.hermes.webhook_url,
+        secret=settings.hermes.webhook_secret,
+        timeout_seconds=settings.hermes.webhook_timeout_seconds,
+    )
+)
 imap = ImapClient(
     host=settings.imap.host,
     port=settings.imap.port,
@@ -256,3 +271,79 @@ async def archive_message(
         from_folder=from_folder,
         archive_folder=archive_folder,
     )
+
+
+@app.post(
+    "/automation/messages/{message_id}/recommendation",
+    response_model=AutomationRecommendationResponse,
+)
+async def record_automation_recommendation(
+    message_id: str,
+    req: AutomationRecommendationRequest,
+    auth_ctx: AuthContext = Depends(require_recommend),
+) -> AutomationRecommendationResponse:
+    if index.get_message_locator(message_id) is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    raw = req.model_dump()
+    actions = [a.model_dump(exclude_none=True) for a in req.actions]
+    validation = validate_recommendation(
+        message_id=message_id,
+        recommendation_message_id=req.message_id,
+        classification=req.classification,
+        confidence=req.confidence,
+        actions=actions,
+        safety=settings.safety,
+    )
+    result = automation_store.record_decision(
+        message_id=message_id,
+        rule_name=req.rule_name,
+        classification=req.classification,
+        confidence=req.confidence,
+        actions=actions,
+        raw_recommendation=raw,
+        validation=validation,
+    )
+    audit.record(
+        actor=_ACTOR,
+        token_id=auth_ctx.token_id,
+        operation="automation_recommendation_dry_run",
+        message_id=message_id,
+        accepted=validation.accepted,
+        rejected_reasons=validation.rejected_reasons,
+        action_count=len(actions),
+    )
+    return AutomationRecommendationResponse(**result)
+
+
+@app.post(
+    "/automation/messages/{message_id}/classify",
+    response_model=AutomationClassifyResponse,
+)
+async def request_automation_classification(
+    message_id: str,
+    auth_ctx: AuthContext = Depends(require_classify),
+) -> AutomationClassifyResponse:
+    row = index.get_message(message_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    row["text"] = clamp_body(row.get("text") or "", settings.safety)
+    try:
+        status = hermes_webhook.send_classification_request(row)
+    except HermesWebhookError as exc:
+        audit.record(
+            actor=_ACTOR,
+            token_id=auth_ctx.token_id,
+            operation="automation_classification_failed",
+            message_id=message_id,
+            error=type(exc).__name__,
+        )
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    audit.record(
+        actor=_ACTOR,
+        token_id=auth_ctx.token_id,
+        operation="automation_classification_requested",
+        message_id=message_id,
+        webhook_status=status,
+    )
+    return AutomationClassifyResponse(message_id=message_id, webhook_status=status)

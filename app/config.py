@@ -64,6 +64,13 @@ class AuthTokenConfig:
 
 
 @dataclass
+class HermesConfig:
+    webhook_url: str = ""
+    webhook_secret: str = ""
+    webhook_timeout_seconds: float = 10.0
+
+
+@dataclass
 class SafetyConfig:
     # Phase 1 is read-only. These flags exist so the service can *refuse*
     # write operations even if endpoints are added later by mistake.
@@ -85,6 +92,7 @@ class Settings:
     sync: SyncConfig
     storage: StorageConfig
     safety: SafetyConfig
+    hermes: HermesConfig
     auth_tokens: list[AuthTokenConfig]
     account: str = "default"
 
@@ -167,12 +175,27 @@ class Settings:
             ),
         )
 
+        hermes_raw = raw.get("hermes", {}) or {}
+        webhook_secret_env = hermes_raw.get(
+            "webhook_secret_env", "BOTT_MAIL_HERMES_WEBHOOK_SECRET"
+        )
+        hermes = HermesConfig(
+            webhook_url=str(hermes_raw.get("webhook_url", "")),
+            webhook_secret=os.environ.get(webhook_secret_env, ""),
+            webhook_timeout_seconds=float(
+                hermes_raw.get(
+                    "webhook_timeout_seconds", HermesConfig.webhook_timeout_seconds
+                )
+            ),
+        )
+
         return cls(
             server=server,
             imap=imap,
             sync=sync,
             storage=storage,
             safety=safety,
+            hermes=hermes,
             auth_tokens=auth_tokens,
             account=raw.get("account", "default"),
         )

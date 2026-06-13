@@ -17,6 +17,17 @@ auth:
       token_env: BOTT_MAIL_ARCHIVE_TOKEN
       scopes:
         - messages:archive
+    - id: hermes-automation
+      token_env: BOTT_MAIL_AUTOMATION_TOKEN
+      scopes:
+        - automation:recommend
+        - automation:classify
+
+hermes:
+  # Example: http://hermes:8644/webhooks/mail-classify
+  webhook_url: ""
+  webhook_secret_env: BOTT_MAIL_HERMES_WEBHOOK_SECRET
+  webhook_timeout_seconds: 10
 
 imap:
   host_env: PROTON_BRIDGE_IMAP_HOST

@@ -87,3 +87,36 @@ class ArchiveResponse(BaseModel):
     message_id: str
     from_folder: str
     archive_folder: str
+
+
+class AutomationAction(BaseModel):
+    type: str
+    tag: str | None = None
+    mechanism: str | None = None
+    channel: str | None = None
+    text: str | None = None
+
+
+class AutomationRecommendationRequest(BaseModel):
+    message_id: str
+    rule_name: str | None = None
+    classification: str
+    confidence: float
+    actions: list[AutomationAction] = Field(default_factory=list)
+    reason: str | None = None
+
+
+class AutomationRecommendationResponse(BaseModel):
+    ok: bool = True
+    decision_id: str
+    message_id: str
+    accepted: bool
+    rejected_reasons: list[str] = Field(default_factory=list)
+    dry_run: bool = True
+    created_at: str
+
+
+class AutomationClassifyResponse(BaseModel):
+    ok: bool = True
+    message_id: str
+    webhook_status: int
