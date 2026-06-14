@@ -75,12 +75,14 @@ class AutomationConfig:
     auto_classify_new_mail: bool = False
     auto_classify_batch_size: int = 10
     callback_base_url: str = "http://bott-mail:8080"
+    execute_recommendations: bool = False
+    autonomous_actions: list[str] = field(default_factory=list)
 
 
 @dataclass
 class SafetyConfig:
-    # Phase 1 is read-only. These flags exist so the service can *refuse*
-    # write operations even if endpoints are added later by mistake.
+    # These flags exist so the service can refuse prohibited write operations
+    # even if endpoints are added later by mistake.
     allow_send: bool = False
     allow_delete: bool = False
     allow_archive: bool = False
@@ -217,6 +219,18 @@ class Settings:
                     AutomationConfig.callback_base_url,
                 )
             ).rstrip("/"),
+            execute_recommendations=bool(
+                automation_raw.get(
+                    "execute_recommendations",
+                    AutomationConfig.execute_recommendations,
+                )
+            ),
+            autonomous_actions=list(
+                automation_raw.get(
+                    "autonomous_actions",
+                    [],
+                )
+            ),
         )
 
         return cls(

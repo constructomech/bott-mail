@@ -1,8 +1,8 @@
 """Safety helpers and the central policy gate.
 
-Phase 1 is strictly read-only. This module provides a single place to assert
-that prohibited capabilities are disabled, and to clamp/validate request
-parameters server-side regardless of what a caller asks for.
+This module provides a single place to assert that prohibited capabilities are
+disabled, and to clamp/validate request parameters server-side regardless of
+what a caller asks for.
 """
 from __future__ import annotations
 
@@ -41,6 +41,11 @@ def assert_archive_allowed(safety: SafetyConfig) -> None:
         raise PolicyError("Archive is disabled by safety.allow_archive=false")
     if not safety.archive_folder.strip():
         raise PolicyError("Archive folder is not configured")
+
+
+def assert_label_allowed(safety: SafetyConfig) -> None:
+    if not safety.allow_label:
+        raise PolicyError("Labels are disabled by safety.allow_label=false")
 
 
 def clamp_limit(requested: int | None, safety: SafetyConfig) -> int:

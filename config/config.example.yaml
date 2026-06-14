@@ -26,11 +26,15 @@ hermes:
   webhook_timeout_seconds: 10
 
 automation:
-  # Dry-run only: sends newly inserted mail to Hermes for classification.
-  # Recommendations are stored but not executed.
+  # Sends newly inserted mail to Hermes for classification in request-bound batches.
   auto_classify_new_mail: false
   auto_classify_batch_size: 10
   callback_base_url: http://bott-mail:8080
+  # Executes accepted recommendations from bott-mail-created classification batches.
+  execute_recommendations: false
+  autonomous_actions:
+    - add_tag
+    - archive
 
 imap:
   host_env: PROTON_BRIDGE_IMAP_HOST

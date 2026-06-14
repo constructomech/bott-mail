@@ -1,4 +1,4 @@
-"""bott-mail-service — FastAPI app (Phase 1, read-only)."""
+"""bott-mail-service FastAPI app."""
 from __future__ import annotations
 
 import logging
@@ -33,6 +33,7 @@ from .models import (
 from .safety import (
     PolicyError,
     assert_archive_allowed,
+    assert_label_allowed,
     assert_read_only,
     clamp_body,
     clamp_days,
@@ -148,6 +149,127 @@ def _send_classification_batch(
     return batch, status
 
 
+def _execute_recommendation_actions(
+    *,
+    decision_id: str,
+    batch_id: str,
+    request_id: str,
+    message_id: str,
+    actions: list[dict],
+) -> None:
+    if not settings.automation.execute_recommendations:
+        return
+    allowed_actions = set(settings.automation.autonomous_actions)
+    for action in actions:
+        action_type = str(action.get("type") or "")
+        if action_type not in allowed_actions:
+            automation_store.record_execution(
+                decision_id=decision_id,
+                batch_id=batch_id,
+                request_id=request_id,
+                message_id=message_id,
+                action_type=action_type,
+                status="skipped",
+                detail="action not enabled for autonomous execution",
+            )
+            continue
+
+        row = index.get_message_locator(message_id)
+        if row is None:
+            automation_store.record_execution(
+                decision_id=decision_id,
+                batch_id=batch_id,
+                request_id=request_id,
+                message_id=message_id,
+                action_type=action_type,
+                status="skipped",
+                detail="message no longer exists in index",
+            )
+            continue
+
+        try:
+            if action_type == "add_tag":
+                assert_label_allowed(settings.safety)
+                tag = str(action.get("tag") or "").strip()
+                if not tag:
+                    raise PolicyError("add_tag action requires a tag")
+                imap.add_tag_message(row["folder"], row["uid"], tag)
+                automation_store.record_execution(
+                    decision_id=decision_id,
+                    batch_id=batch_id,
+                    request_id=request_id,
+                    message_id=message_id,
+                    action_type=action_type,
+                    status="executed",
+                    detail=tag,
+                )
+                audit.record(
+                    actor="automation",
+                    token_id="internal",
+                    operation="automation_action_executed",
+                    batch_id=batch_id,
+                    request_id=request_id,
+                    message_id=message_id,
+                    action_type=action_type,
+                    tag=tag,
+                )
+            elif action_type == "archive":
+                assert_archive_allowed(settings.safety)
+                archive_folder = settings.safety.archive_folder
+                if row["folder"] != archive_folder:
+                    imap.archive_message(row["folder"], row["uid"], archive_folder)
+                    index.remove_message(message_id)
+                automation_store.record_execution(
+                    decision_id=decision_id,
+                    batch_id=batch_id,
+                    request_id=request_id,
+                    message_id=message_id,
+                    action_type=action_type,
+                    status="executed",
+                    detail=archive_folder,
+                )
+                audit.record(
+                    actor="automation",
+                    token_id="internal",
+                    operation="automation_action_executed",
+                    batch_id=batch_id,
+                    request_id=request_id,
+                    message_id=message_id,
+                    action_type=action_type,
+                    archive_folder=archive_folder,
+                )
+            else:
+                automation_store.record_execution(
+                    decision_id=decision_id,
+                    batch_id=batch_id,
+                    request_id=request_id,
+                    message_id=message_id,
+                    action_type=action_type,
+                    status="skipped",
+                    detail="action type is not executable",
+                )
+        except Exception as exc:  # noqa: BLE001
+            automation_store.record_execution(
+                decision_id=decision_id,
+                batch_id=batch_id,
+                request_id=request_id,
+                message_id=message_id,
+                action_type=action_type,
+                status="failed",
+                detail=type(exc).__name__,
+            )
+            audit.record(
+                actor="automation",
+                token_id="internal",
+                operation="automation_action_failed",
+                batch_id=batch_id,
+                request_id=request_id,
+                message_id=message_id,
+                action_type=action_type,
+                error=type(exc).__name__,
+            )
+
+
 def _run_incremental(trigger: str) -> None:
     try:
         result = syncer.incremental(settings.sync.folders)
@@ -173,7 +295,7 @@ def _poll_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log.info("bott-mail-service %s starting (read-only)", __version__)
+    log.info("bott-mail-service %s starting", __version__)
     watchers = []
     if settings.sync.interval_minutes > 0:
         if settings.sync.mode == "idle":
@@ -395,6 +517,14 @@ async def record_classification_batch_recommendations(
             validation=validation,
         )
         decisions.append(AutomationRecommendationResponse(**result))
+        if validation.accepted:
+            _execute_recommendation_actions(
+                decision_id=result["decision_id"],
+                batch_id=batch_id,
+                request_id=item.request_id,
+                message_id=message_id,
+                actions=actions,
+            )
         completed_request_ids.append(item.request_id)
         audit.record(
             actor=_ACTOR,

@@ -1,4 +1,4 @@
-"""IMAP client for Proton Bridge (read-only) using IMAPClient.
+"""IMAP client for Proton Bridge using IMAPClient.
 
 Supports:
   - UID-based incremental fetch (only genuinely new messages)
@@ -162,6 +162,18 @@ class ImapClient:
         try:
             client.select_folder(folder, readonly=False)
             client.move([int(uid)], archive_folder)
+        finally:
+            try:
+                client.logout()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def add_tag_message(self, folder: str, uid: str, tag: str) -> None:
+        """Apply a Proton Bridge label by copying the message to its label mailbox."""
+        client = self.connect()
+        try:
+            client.select_folder(folder, readonly=False)
+            client.copy([int(uid)], tag)
         finally:
             try:
                 client.logout()

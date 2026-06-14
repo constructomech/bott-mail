@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 class HealthResponse(BaseModel):
     ok: bool = True
     service: str = "bott-mail-service"
-    mode: str = "read-only"
+    mode: str = "automation"
     version: str
     imap_connected: bool | None = None
 

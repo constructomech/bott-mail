@@ -133,6 +133,50 @@ class AutomationStore:
             "created_at": created_at,
         }
 
+    def record_execution(
+        self,
+        *,
+        decision_id: str,
+        batch_id: str,
+        request_id: str,
+        message_id: str,
+        action_type: str,
+        status: str,
+        detail: str | None = None,
+    ) -> dict[str, Any]:
+        execution_id = str(uuid.uuid4())
+        created_at = _now_iso()
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO automation_executions (
+                  id, account, decision_id, batch_id, request_id, message_id,
+                  action_type, status, detail, created_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    execution_id,
+                    self._account,
+                    decision_id,
+                    batch_id,
+                    request_id,
+                    message_id,
+                    action_type,
+                    status,
+                    detail,
+                    created_at,
+                ),
+            )
+        return {
+            "execution_id": execution_id,
+            "decision_id": decision_id,
+            "message_id": message_id,
+            "action_type": action_type,
+            "status": status,
+            "detail": detail,
+            "created_at": created_at,
+        }
+
     def create_classification_batch(
         self,
         *,
