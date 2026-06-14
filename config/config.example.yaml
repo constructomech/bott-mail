@@ -8,20 +8,16 @@ server:
 auth:
   tokens:
     - id: hermes-read
-      token_env: BOTT_MAIL_HERMES_READ_TOKEN
+      token_env: BOTT_MAIL_READ_TOKEN
       scopes:
         - sync:run
         - messages:search
         - messages:read
+        - automation:recommend
     - id: archive-worker
       token_env: BOTT_MAIL_ARCHIVE_TOKEN
       scopes:
         - messages:archive
-    - id: hermes-automation
-      token_env: BOTT_MAIL_AUTOMATION_TOKEN
-      scopes:
-        - automation:recommend
-        - automation:classify
 
 hermes:
   # Example: http://hermes:8644/webhooks/mail-classify
@@ -33,7 +29,8 @@ automation:
   # Dry-run only: sends newly inserted mail to Hermes for classification.
   # Recommendations are stored but not executed.
   auto_classify_new_mail: false
-  auto_classify_limit_per_sync: 10
+  auto_classify_batch_size: 10
+  callback_base_url: http://bott-mail:8080
 
 imap:
   host_env: PROTON_BRIDGE_IMAP_HOST

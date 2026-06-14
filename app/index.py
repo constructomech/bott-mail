@@ -333,6 +333,7 @@ class MessageIndex:
             "subject": r["subject"],
             "date": r["date_utc"],
             "text": r["body_text"],
+            "body_sha256": r["body_sha256"],
             "unread": bool(r["unread"]),
             "attachments": json.loads(r["attachments_json"] or "[]"),
         }

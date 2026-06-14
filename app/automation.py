@@ -2,14 +2,22 @@
 from __future__ import annotations
 
 import json
+import glob
+import os
 import sqlite3
 import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from datetime import timedelta
 from typing import Any
 
 from .config import SafetyConfig
+
+
+_MIGRATIONS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "migrations"
+)
 
 
 ALLOWED_ACTIONS = {"archive", "unsubscribe", "add_tag", "slack_notify"}
@@ -71,6 +79,14 @@ class AutomationStore:
         self._path = sqlite_path
         self._account = account
         self._lock = threading.Lock()
+        os.makedirs(os.path.dirname(sqlite_path), exist_ok=True)
+        self._init_db()
+
+    def _init_db(self) -> None:
+        with self._lock, self._connect() as conn:
+            for path in sorted(glob.glob(os.path.join(_MIGRATIONS_DIR, "*.sql"))):
+                with open(path) as f:
+                    conn.executescript(f.read())
 
     def record_decision(
         self,
@@ -116,6 +132,122 @@ class AutomationStore:
             "dry_run": True,
             "created_at": created_at,
         }
+
+    def create_classification_batch(
+        self,
+        *,
+        trigger: str,
+        messages: list[dict[str, Any]],
+        ttl_minutes: int = 30,
+    ) -> dict[str, Any]:
+        batch_id = f"batch_{uuid.uuid4().hex}"
+        created_at = _now_iso()
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        items: list[dict[str, Any]] = []
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO classification_batches (
+                  id, account, status, trigger, created_at, expires_at
+                ) VALUES (?,?,?,?,?,?)
+                """,
+                (batch_id, self._account, "pending", trigger, created_at, expires_at),
+            )
+            for message in messages:
+                request_id = f"req_{uuid.uuid4().hex}"
+                body_sha = str(message.get("body_sha256") or "")
+                conn.execute(
+                    """
+                    INSERT INTO classification_batch_items (
+                      request_id, batch_id, account, message_id, body_sha256,
+                      status, created_at
+                    ) VALUES (?,?,?,?,?,?,?)
+                    """,
+                    (
+                        request_id,
+                        batch_id,
+                        self._account,
+                        message["id"],
+                        body_sha,
+                        "pending",
+                        created_at,
+                    ),
+                )
+                items.append(
+                    {
+                        "request_id": request_id,
+                        "message_id": message["id"],
+                        "body_sha256": body_sha,
+                    }
+                )
+        return {
+            "batch_id": batch_id,
+            "trigger": trigger,
+            "created_at": created_at,
+            "expires_at": expires_at,
+            "items": items,
+        }
+
+    def get_pending_batch_items(self, batch_id: str) -> dict[str, dict[str, Any]]:
+        now = _now_iso()
+        with self._lock, self._connect() as conn:
+            batch = conn.execute(
+                """
+                SELECT * FROM classification_batches
+                WHERE id = ? AND account = ? AND status = 'pending' AND expires_at >= ?
+                """,
+                (batch_id, self._account, now),
+            ).fetchone()
+            if batch is None:
+                return {}
+            rows = conn.execute(
+                """
+                SELECT * FROM classification_batch_items
+                WHERE batch_id = ? AND account = ? AND status = 'pending'
+                """,
+                (batch_id, self._account),
+            ).fetchall()
+        return {
+            row["request_id"]: {
+                "request_id": row["request_id"],
+                "message_id": row["message_id"],
+                "body_sha256": row["body_sha256"],
+            }
+            for row in rows
+        }
+
+    def complete_batch_items(self, batch_id: str, request_ids: list[str]) -> None:
+        if not request_ids:
+            return
+        completed_at = _now_iso()
+        with self._lock, self._connect() as conn:
+            for request_id in request_ids:
+                conn.execute(
+                    """
+                    UPDATE classification_batch_items
+                    SET status = 'completed', completed_at = ?
+                    WHERE batch_id = ? AND request_id = ? AND account = ?
+                    """,
+                    (completed_at, batch_id, request_id, self._account),
+                )
+            remaining = conn.execute(
+                """
+                SELECT COUNT(*) FROM classification_batch_items
+                WHERE batch_id = ? AND account = ? AND status = 'pending'
+                """,
+                (batch_id, self._account),
+            ).fetchone()[0]
+            if remaining == 0:
+                conn.execute(
+                    """
+                    UPDATE classification_batches
+                    SET status = 'completed', completed_at = ?
+                    WHERE id = ? AND account = ?
+                    """,
+                    (completed_at, batch_id, self._account),
+                )
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._path)

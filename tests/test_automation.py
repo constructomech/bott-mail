@@ -56,7 +56,6 @@ auth:
       token_env: BOTT_MAIL_AUTOMATION_TOKEN
       scopes:
         - automation:recommend
-        - automation:classify
 hermes:
   webhook_url: http://hermes.example/webhooks/mail-classify
   webhook_secret_env: BOTT_MAIL_HERMES_WEBHOOK_SECRET
@@ -67,7 +66,8 @@ safety:
   allow_archive: true
 automation:
   auto_classify_new_mail: true
-  auto_classify_limit_per_sync: 10
+  auto_classify_batch_size: 10
+  callback_base_url: http://bott-mail:8080
 """,
         encoding="utf-8",
     )
@@ -81,9 +81,7 @@ automation:
     return module.app, str(tmp_path / "mail.sqlite")
 
 
-def test_record_recommendation_endpoint_accepts_and_stores_dry_run(
-    monkeypatch, tmp_path, sample_eml
-):
+def test_unbound_recommendation_endpoint_is_not_kept(monkeypatch, tmp_path, sample_eml):
     app, db_path = _load_app(monkeypatch, tmp_path)
     idx = MessageIndex(db_path, account="default")
     idx.upsert_messages("INBOX", [("1", parse_email(sample_eml), True, False)])
@@ -95,88 +93,13 @@ def test_record_recommendation_endpoint_accepts_and_stores_dry_run(
         headers={"Authorization": "Bearer automation-token"},
         json={
             "message_id": mid,
-            "rule_name": "political-mail",
-            "classification": "political",
-            "confidence": 0.95,
-            "actions": [{"type": "archive"}],
-            "reason": "Campaign email",
-        },
-    )
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["accepted"] is True
-    assert body["dry_run"] is True
-    assert body["message_id"] == mid
-    assert body["decision_id"]
-
-
-def test_record_recommendation_requires_automation_scope(monkeypatch, tmp_path, sample_eml):
-    app, db_path = _load_app(monkeypatch, tmp_path)
-    idx = MessageIndex(db_path, account="default")
-    idx.upsert_messages("INBOX", [("1", parse_email(sample_eml), True, False)])
-    mid = stable_id("default", "INBOX", "1")
-    client = TestClient(app)
-
-    resp = client.post(
-        f"/automation/messages/{mid}/recommendation",
-        headers={"Authorization": "Bearer read-token"},
-        json={
-            "message_id": mid,
             "classification": "political",
             "confidence": 0.95,
             "actions": [{"type": "archive"}],
         },
     )
 
-    assert resp.status_code == 403
-    assert resp.json()["detail"] == "Missing scope: automation:recommend"
-
-
-def test_request_classification_posts_to_hermes_webhook(
-    monkeypatch, tmp_path, sample_eml
-):
-    app, db_path = _load_app(monkeypatch, tmp_path)
-    idx = MessageIndex(db_path, account="default")
-    idx.upsert_messages("INBOX", [("1", parse_email(sample_eml), True, False)])
-    mid = stable_id("default", "INBOX", "1")
-
-    import app.main as main
-
-    seen = {}
-
-    def fake_send(message):
-        seen["message"] = message
-        return 202
-
-    monkeypatch.setattr(main.hermes_webhook, "send_classification_request", fake_send)
-    client = TestClient(app)
-
-    resp = client.post(
-        f"/automation/messages/{mid}/classify",
-        headers={"Authorization": "Bearer automation-token"},
-    )
-
-    assert resp.status_code == 200
-    assert resp.json()["webhook_status"] == 202
-    assert seen["message"]["id"] == mid
-    assert seen["message"]["text"].startswith("Hello")
-
-
-def test_request_classification_requires_classify_scope(monkeypatch, tmp_path, sample_eml):
-    app, db_path = _load_app(monkeypatch, tmp_path)
-    idx = MessageIndex(db_path, account="default")
-    idx.upsert_messages("INBOX", [("1", parse_email(sample_eml), True, False)])
-    mid = stable_id("default", "INBOX", "1")
-    client = TestClient(app)
-
-    resp = client.post(
-        f"/automation/messages/{mid}/classify",
-        headers={"Authorization": "Bearer read-token"},
-    )
-
-    assert resp.status_code == 403
-    assert resp.json()["detail"] == "Missing scope: automation:classify"
+    assert resp.status_code == 404
 
 
 def test_auto_classify_inserted_messages(monkeypatch, tmp_path, sample_eml):
@@ -189,17 +112,17 @@ def test_auto_classify_inserted_messages(monkeypatch, tmp_path, sample_eml):
 
     seen = []
 
-    def fake_send(message):
-        seen.append(message["id"])
+    def fake_send(*, batch, messages, callback_base_url):
+        seen.append([message["id"] for message in messages])
         return 202
 
-    monkeypatch.setattr(main.hermes_webhook, "send_classification_request", fake_send)
+    monkeypatch.setattr(main.hermes_webhook, "send_classification_batch", fake_send)
     main._auto_classify_inserted([mid], "test")
 
-    assert seen == [mid]
+    assert seen == [[mid]]
 
 
-def test_auto_classify_respects_per_sync_limit(monkeypatch, tmp_path, sample_eml):
+def test_auto_classify_batches_all_inserted_messages(monkeypatch, tmp_path, sample_eml):
     app, db_path = _load_app(monkeypatch, tmp_path)
     idx = MessageIndex(db_path, account="default")
     idx.upsert_messages("INBOX", [("1", parse_email(sample_eml), True, False)])
@@ -208,14 +131,75 @@ def test_auto_classify_respects_per_sync_limit(monkeypatch, tmp_path, sample_eml
 
     import app.main as main
 
-    main.settings.automation.auto_classify_limit_per_sync = 1
+    main.settings.automation.auto_classify_batch_size = 1
     seen = []
 
-    def fake_send(message):
-        seen.append(message["id"])
+    def fake_send(*, batch, messages, callback_base_url):
+        seen.append([message["id"] for message in messages])
         return 202
 
-    monkeypatch.setattr(main.hermes_webhook, "send_classification_request", fake_send)
+    monkeypatch.setattr(main.hermes_webhook, "send_classification_batch", fake_send)
     main._auto_classify_inserted(mids, "test")
 
-    assert seen == [mids[0]]
+    assert seen == [[mids[0]], [mids[1]]]
+
+
+def test_batch_recommendation_callback_validates_request_binding(
+    monkeypatch, tmp_path, sample_eml
+):
+    app, db_path = _load_app(monkeypatch, tmp_path)
+    idx = MessageIndex(db_path, account="default")
+    idx.upsert_messages("INBOX", [("1", parse_email(sample_eml), True, False)])
+    mid = stable_id("default", "INBOX", "1")
+
+    import app.main as main
+
+    client = TestClient(app)
+    row = idx.get_message(mid)
+    batch = main.automation_store.create_classification_batch(
+        trigger="test",
+        messages=[row],
+    )
+    batch_id = batch["batch_id"]
+    pending = main.automation_store.get_pending_batch_items(batch_id)
+    request_id = next(iter(pending))
+
+    bad_resp = client.post(
+        f"/automation/classification-batches/{batch_id}/recommendations",
+        headers={"Authorization": "Bearer automation-token"},
+        json={
+            "recommendations": [
+                {
+                    "request_id": "req_unknown",
+                    "message_id": mid,
+                    "classification": "political",
+                    "confidence": 0.95,
+                    "actions": [{"type": "archive"}],
+                }
+            ]
+        },
+    )
+    assert bad_resp.status_code == 400
+
+    resp = client.post(
+        f"/automation/classification-batches/{batch_id}/recommendations",
+        headers={"Authorization": "Bearer automation-token"},
+        json={
+            "recommendations": [
+                {
+                    "request_id": request_id,
+                    "message_id": mid,
+                    "classification": "political",
+                    "confidence": 0.95,
+                    "actions": [{"type": "archive"}],
+                    "reason": "Campaign email",
+                }
+            ]
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["accepted_count"] == 1
+    assert body["rejected_count"] == 0
+    assert body["decisions"][0]["message_id"] == mid

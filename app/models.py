@@ -106,6 +106,14 @@ class AutomationRecommendationRequest(BaseModel):
     reason: str | None = None
 
 
+class BatchAutomationRecommendationItem(AutomationRecommendationRequest):
+    request_id: str
+
+
+class BatchAutomationRecommendationRequest(BaseModel):
+    recommendations: list[BatchAutomationRecommendationItem] = Field(min_length=1)
+
+
 class AutomationRecommendationResponse(BaseModel):
     ok: bool = True
     decision_id: str
@@ -116,7 +124,9 @@ class AutomationRecommendationResponse(BaseModel):
     created_at: str
 
 
-class AutomationClassifyResponse(BaseModel):
+class AutomationBatchRecommendationResponse(BaseModel):
     ok: bool = True
-    message_id: str
-    webhook_status: int
+    batch_id: str
+    accepted_count: int
+    rejected_count: int
+    decisions: list[AutomationRecommendationResponse]

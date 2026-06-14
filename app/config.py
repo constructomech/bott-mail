@@ -73,7 +73,8 @@ class HermesConfig:
 @dataclass
 class AutomationConfig:
     auto_classify_new_mail: bool = False
-    auto_classify_limit_per_sync: int = 10
+    auto_classify_batch_size: int = 10
+    callback_base_url: str = "http://bott-mail:8080"
 
 
 @dataclass
@@ -204,12 +205,18 @@ class Settings:
                     AutomationConfig.auto_classify_new_mail,
                 )
             ),
-            auto_classify_limit_per_sync=int(
+            auto_classify_batch_size=int(
                 automation_raw.get(
-                    "auto_classify_limit_per_sync",
-                    AutomationConfig.auto_classify_limit_per_sync,
+                    "auto_classify_batch_size",
+                    AutomationConfig.auto_classify_batch_size,
                 )
             ),
+            callback_base_url=str(
+                automation_raw.get(
+                    "callback_base_url",
+                    AutomationConfig.callback_base_url,
+                )
+            ).rstrip("/"),
         )
 
         return cls(

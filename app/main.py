@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from . import __version__
 from .audit import AuditLog
 from .auth import AuthContext, TokenAuth, TokenSpec, require_scope
-from .automation import AutomationStore, validate_recommendation
+from .automation import AutomationStore, ValidationResult, validate_recommendation
 from .config import Settings
 from .hermes import HermesWebhookClient, HermesWebhookConfig, HermesWebhookError
 from .imap_client import ImapClient
@@ -19,9 +19,9 @@ from .index import MessageIndex
 from .models import (
     HealthResponse,
     ArchiveResponse,
-    AutomationRecommendationRequest,
+    AutomationBatchRecommendationResponse,
     AutomationRecommendationResponse,
-    AutomationClassifyResponse,
+    BatchAutomationRecommendationRequest,
     MessageDetail,
     MessageResponse,
     RecentResponse,
@@ -61,7 +61,6 @@ require_search = require_scope(auth, "messages:search")
 require_read = require_scope(auth, "messages:read")
 require_archive = require_scope(auth, "messages:archive")
 require_recommend = require_scope(auth, "automation:recommend")
-require_classify = require_scope(auth, "automation:classify")
 audit = AuditLog(settings.storage.audit_log)
 index = MessageIndex(settings.storage.sqlite_path, account=settings.account)
 automation_store = AutomationStore(settings.storage.sqlite_path, account=settings.account)
@@ -89,35 +88,64 @@ _last_incremental: dict[str, object] = {"result": None, "at": None}
 def _auto_classify_inserted(message_ids: list[str], trigger: str) -> None:
     if not settings.automation.auto_classify_new_mail:
         return
-    limit = max(0, settings.automation.auto_classify_limit_per_sync)
-    if limit <= 0:
+    batch_size = max(0, settings.automation.auto_classify_batch_size)
+    if batch_size <= 0:
         return
-    for message_id in message_ids[:limit]:
-        row = index.get_message(message_id)
-        if row is None:
+    messages = []
+    for message_id in message_ids:
+        message = index.get_message(message_id)
+        if message is None:
             continue
-        row["text"] = clamp_body(row.get("text") or "", settings.safety)
+        message["text"] = clamp_body(message.get("text") or "", settings.safety)
+        messages.append(message)
+    for start in range(0, len(messages), batch_size):
         try:
-            status = hermes_webhook.send_classification_request(row)
-        except HermesWebhookError as exc:
-            audit.record(
+            _send_classification_batch(
+                messages[start : start + batch_size],
+                trigger=trigger,
                 actor="worker",
                 token_id="internal",
-                operation="automation_classification_failed",
-                trigger=trigger,
-                message_id=message_id,
-                error=type(exc).__name__,
             )
-            log.warning("Auto-classify failed for %s: %s", message_id, exc)
+        except HermesWebhookError as exc:
+            log.warning("Auto-classify failed: %s", exc)
             continue
-        audit.record(
-            actor="worker",
-            token_id="internal",
-            operation="automation_classification_requested",
-            trigger=trigger,
-            message_id=message_id,
-            webhook_status=status,
+
+
+def _send_classification_batch(
+    messages: list[dict], *, trigger: str, actor: str, token_id: str
+) -> tuple[dict, int]:
+    batch = automation_store.create_classification_batch(
+        trigger=trigger,
+        messages=messages,
+    )
+    try:
+        status = hermes_webhook.send_classification_batch(
+            batch=batch,
+            messages=messages,
+            callback_base_url=settings.automation.callback_base_url,
         )
+    except HermesWebhookError as exc:
+        audit.record(
+            actor=actor,
+            token_id=token_id,
+            operation="automation_classification_failed",
+            trigger=trigger,
+            batch_id=batch["batch_id"],
+            message_count=len(messages),
+            error=type(exc).__name__,
+        )
+        raise
+
+    audit.record(
+        actor=actor,
+        token_id=token_id,
+        operation="automation_classification_requested",
+        trigger=trigger,
+        batch_id=batch["batch_id"],
+        message_count=len(messages),
+        webhook_status=status,
+    )
+    return batch, status
 
 
 def _run_incremental(trigger: str) -> None:
@@ -309,76 +337,82 @@ async def archive_message(
 
 
 @app.post(
-    "/automation/messages/{message_id}/recommendation",
-    response_model=AutomationRecommendationResponse,
+    "/automation/classification-batches/{batch_id}/recommendations",
+    response_model=AutomationBatchRecommendationResponse,
 )
-async def record_automation_recommendation(
-    message_id: str,
-    req: AutomationRecommendationRequest,
+async def record_classification_batch_recommendations(
+    batch_id: str,
+    req: BatchAutomationRecommendationRequest,
     auth_ctx: AuthContext = Depends(require_recommend),
-) -> AutomationRecommendationResponse:
-    if index.get_message_locator(message_id) is None:
-        raise HTTPException(status_code=404, detail="Message not found")
+) -> AutomationBatchRecommendationResponse:
+    pending = automation_store.get_pending_batch_items(batch_id)
+    if not pending:
+        raise HTTPException(status_code=404, detail="Classification batch not pending")
 
-    raw = req.model_dump()
-    actions = [a.model_dump(exclude_none=True) for a in req.actions]
-    validation = validate_recommendation(
-        message_id=message_id,
-        recommendation_message_id=req.message_id,
-        classification=req.classification,
-        confidence=req.confidence,
-        actions=actions,
-        safety=settings.safety,
-    )
-    result = automation_store.record_decision(
-        message_id=message_id,
-        rule_name=req.rule_name,
-        classification=req.classification,
-        confidence=req.confidence,
-        actions=actions,
-        raw_recommendation=raw,
-        validation=validation,
-    )
-    audit.record(
-        actor=_ACTOR,
-        token_id=auth_ctx.token_id,
-        operation="automation_recommendation_dry_run",
-        message_id=message_id,
-        accepted=validation.accepted,
-        rejected_reasons=validation.rejected_reasons,
-        action_count=len(actions),
-    )
-    return AutomationRecommendationResponse(**result)
+    request_ids = [item.request_id for item in req.recommendations]
+    if len(request_ids) != len(set(request_ids)):
+        raise HTTPException(status_code=400, detail="Duplicate request_id in recommendations")
 
+    unknown = sorted(set(request_ids) - set(pending))
+    if unknown:
+        raise HTTPException(status_code=400, detail={"unknown_request_ids": unknown})
 
-@app.post(
-    "/automation/messages/{message_id}/classify",
-    response_model=AutomationClassifyResponse,
-)
-async def request_automation_classification(
-    message_id: str,
-    auth_ctx: AuthContext = Depends(require_classify),
-) -> AutomationClassifyResponse:
-    row = index.get_message(message_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="Message not found")
-    row["text"] = clamp_body(row.get("text") or "", settings.safety)
-    try:
-        status = hermes_webhook.send_classification_request(row)
-    except HermesWebhookError as exc:
+    decisions = []
+    completed_request_ids = []
+    for item in req.recommendations:
+        expected = pending[item.request_id]
+        message_id = expected["message_id"]
+        row = index.get_message(message_id)
+        extra_reasons = []
+        if row is None:
+            extra_reasons.append("message no longer exists")
+        elif row.get("body_sha256") != expected["body_sha256"]:
+            extra_reasons.append("message body changed since classification request")
+
+        raw = item.model_dump()
+        actions = [a.model_dump(exclude_none=True) for a in item.actions]
+        validation = validate_recommendation(
+            message_id=message_id,
+            recommendation_message_id=item.message_id,
+            classification=item.classification,
+            confidence=item.confidence,
+            actions=actions,
+            safety=settings.safety,
+        )
+        if extra_reasons:
+            validation = ValidationResult(
+                accepted=False,
+                rejected_reasons=validation.rejected_reasons + extra_reasons,
+            )
+
+        result = automation_store.record_decision(
+            message_id=message_id,
+            rule_name=item.rule_name,
+            classification=item.classification,
+            confidence=item.confidence,
+            actions=actions,
+            raw_recommendation=raw,
+            validation=validation,
+        )
+        decisions.append(AutomationRecommendationResponse(**result))
+        completed_request_ids.append(item.request_id)
         audit.record(
             actor=_ACTOR,
             token_id=auth_ctx.token_id,
-            operation="automation_classification_failed",
+            operation="automation_recommendation_dry_run",
+            batch_id=batch_id,
+            request_id=item.request_id,
             message_id=message_id,
-            error=type(exc).__name__,
+            accepted=validation.accepted,
+            rejected_reasons=validation.rejected_reasons,
+            action_count=len(actions),
         )
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    audit.record(
-        actor=_ACTOR,
-        token_id=auth_ctx.token_id,
-        operation="automation_classification_requested",
-        message_id=message_id,
-        webhook_status=status,
+
+    automation_store.complete_batch_items(batch_id, completed_request_ids)
+    accepted_count = sum(1 for decision in decisions if decision.accepted)
+    return AutomationBatchRecommendationResponse(
+        batch_id=batch_id,
+        accepted_count=accepted_count,
+        rejected_count=len(decisions) - accepted_count,
+        decisions=decisions,
     )
-    return AutomationClassifyResponse(message_id=message_id, webhook_status=status)
