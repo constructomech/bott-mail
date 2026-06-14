@@ -29,6 +29,12 @@ hermes:
   webhook_secret_env: BOTT_MAIL_HERMES_WEBHOOK_SECRET
   webhook_timeout_seconds: 10
 
+automation:
+  # Dry-run only: sends newly inserted mail to Hermes for classification.
+  # Recommendations are stored but not executed.
+  auto_classify_new_mail: false
+  auto_classify_limit_per_sync: 10
+
 imap:
   host_env: PROTON_BRIDGE_IMAP_HOST
   port_env: PROTON_BRIDGE_IMAP_PORT

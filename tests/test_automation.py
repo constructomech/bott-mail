@@ -65,6 +65,9 @@ storage:
   audit_log: {tmp_path / "audit.log"}
 safety:
   allow_archive: true
+automation:
+  auto_classify_new_mail: true
+  auto_classify_limit_per_sync: 10
 """,
         encoding="utf-8",
     )
@@ -174,3 +177,45 @@ def test_request_classification_requires_classify_scope(monkeypatch, tmp_path, s
 
     assert resp.status_code == 403
     assert resp.json()["detail"] == "Missing scope: automation:classify"
+
+
+def test_auto_classify_inserted_messages(monkeypatch, tmp_path, sample_eml):
+    app, db_path = _load_app(monkeypatch, tmp_path)
+    idx = MessageIndex(db_path, account="default")
+    idx.upsert_messages("INBOX", [("1", parse_email(sample_eml), True, False)])
+    mid = stable_id("default", "INBOX", "1")
+
+    import app.main as main
+
+    seen = []
+
+    def fake_send(message):
+        seen.append(message["id"])
+        return 202
+
+    monkeypatch.setattr(main.hermes_webhook, "send_classification_request", fake_send)
+    main._auto_classify_inserted([mid], "test")
+
+    assert seen == [mid]
+
+
+def test_auto_classify_respects_per_sync_limit(monkeypatch, tmp_path, sample_eml):
+    app, db_path = _load_app(monkeypatch, tmp_path)
+    idx = MessageIndex(db_path, account="default")
+    idx.upsert_messages("INBOX", [("1", parse_email(sample_eml), True, False)])
+    idx.upsert_messages("INBOX", [("2", parse_email(sample_eml), True, False)])
+    mids = [stable_id("default", "INBOX", "1"), stable_id("default", "INBOX", "2")]
+
+    import app.main as main
+
+    main.settings.automation.auto_classify_limit_per_sync = 1
+    seen = []
+
+    def fake_send(message):
+        seen.append(message["id"])
+        return 202
+
+    monkeypatch.setattr(main.hermes_webhook, "send_classification_request", fake_send)
+    main._auto_classify_inserted(mids, "test")
+
+    assert seen == [mids[0]]

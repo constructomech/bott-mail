@@ -26,6 +26,7 @@ class IndexResult:
     inserted: int
     updated: int
     seen: int
+    inserted_ids: list[str]
 
 
 class MessageIndex:
@@ -60,6 +61,7 @@ class MessageIndex:
         """
         inserted = 0
         updated = 0
+        inserted_ids: list[str] = []
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         with self._lock, self._connect() as conn:
             for uid, msg, unread, flagged in parsed:
@@ -125,6 +127,7 @@ class MessageIndex:
                         (new_rowid, msg.subject or "", msg.from_addr or "", msg.body_text),
                     )
                     inserted += 1
+                    inserted_ids.append(mid)
                 else:
                     conn.execute(
                         """
@@ -166,7 +169,12 @@ class MessageIndex:
                         ),
                     )
                     updated += 1
-        return IndexResult(inserted=inserted, updated=updated, seen=len(parsed))
+        return IndexResult(
+            inserted=inserted,
+            updated=updated,
+            seen=len(parsed),
+            inserted_ids=inserted_ids,
+        )
 
     # ---- reads --------------------------------------------------------
 

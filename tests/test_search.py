@@ -31,6 +31,8 @@ def test_sync_idempotent(tmp_db, sample_eml):
     r2 = idx.upsert_messages("INBOX", [("1", pm, True, False)])
     assert r1.inserted == 1 and r1.updated == 0
     assert r2.inserted == 0 and r2.updated == 1
+    assert r1.inserted_ids == [stable_id("test", "INBOX", "1")]
+    assert r2.inserted_ids == []
     # No duplicate rows
     results = idx.search("insurance", days=365, limit=10)
     assert len(results) == 1

@@ -71,6 +71,12 @@ class HermesConfig:
 
 
 @dataclass
+class AutomationConfig:
+    auto_classify_new_mail: bool = False
+    auto_classify_limit_per_sync: int = 10
+
+
+@dataclass
 class SafetyConfig:
     # Phase 1 is read-only. These flags exist so the service can *refuse*
     # write operations even if endpoints are added later by mistake.
@@ -93,6 +99,7 @@ class Settings:
     storage: StorageConfig
     safety: SafetyConfig
     hermes: HermesConfig
+    automation: AutomationConfig
     auth_tokens: list[AuthTokenConfig]
     account: str = "default"
 
@@ -189,6 +196,22 @@ class Settings:
             ),
         )
 
+        automation_raw = raw.get("automation", {}) or {}
+        automation = AutomationConfig(
+            auto_classify_new_mail=bool(
+                automation_raw.get(
+                    "auto_classify_new_mail",
+                    AutomationConfig.auto_classify_new_mail,
+                )
+            ),
+            auto_classify_limit_per_sync=int(
+                automation_raw.get(
+                    "auto_classify_limit_per_sync",
+                    AutomationConfig.auto_classify_limit_per_sync,
+                )
+            ),
+        )
+
         return cls(
             server=server,
             imap=imap,
@@ -196,6 +219,7 @@ class Settings:
             storage=storage,
             safety=safety,
             hermes=hermes,
+            automation=automation,
             auth_tokens=auth_tokens,
             account=raw.get("account", "default"),
         )

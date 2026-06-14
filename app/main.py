@@ -86,10 +86,45 @@ _worker_stop = threading.Event()
 _last_incremental: dict[str, object] = {"result": None, "at": None}
 
 
+def _auto_classify_inserted(message_ids: list[str], trigger: str) -> None:
+    if not settings.automation.auto_classify_new_mail:
+        return
+    limit = max(0, settings.automation.auto_classify_limit_per_sync)
+    if limit <= 0:
+        return
+    for message_id in message_ids[:limit]:
+        row = index.get_message(message_id)
+        if row is None:
+            continue
+        row["text"] = clamp_body(row.get("text") or "", settings.safety)
+        try:
+            status = hermes_webhook.send_classification_request(row)
+        except HermesWebhookError as exc:
+            audit.record(
+                actor="worker",
+                token_id="internal",
+                operation="automation_classification_failed",
+                trigger=trigger,
+                message_id=message_id,
+                error=type(exc).__name__,
+            )
+            log.warning("Auto-classify failed for %s: %s", message_id, exc)
+            continue
+        audit.record(
+            actor="worker",
+            token_id="internal",
+            operation="automation_classification_requested",
+            trigger=trigger,
+            message_id=message_id,
+            webhook_status=status,
+        )
+
+
 def _run_incremental(trigger: str) -> None:
     try:
         result = syncer.incremental(settings.sync.folders)
         _last_incremental["result"] = result
+        _auto_classify_inserted(list(result.get("inserted_ids") or []), trigger)
         audit.record(
             actor="worker",
             token_id="internal",
