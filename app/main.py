@@ -281,9 +281,10 @@ def _execute_recommendation_actions(
                     message_id=message_id,
                     action_type=action_type,
                     action=action,
-                    reason="action type is not executable",
-                )
+                reason="action type is not executable",
+            )
         except Exception as exc:  # noqa: BLE001
+            detail = repr(exc)
             automation_store.record_execution(
                 decision_id=decision_id,
                 batch_id=batch_id,
@@ -291,7 +292,7 @@ def _execute_recommendation_actions(
                 message_id=message_id,
                 action_type=action_type,
                 status="failed",
-                detail=type(exc).__name__,
+                detail=detail,
             )
             audit.record(
                 actor="automation",
@@ -302,8 +303,10 @@ def _execute_recommendation_actions(
                 message_id=message_id,
                 action_type=action_type,
                 error=type(exc).__name__,
+                detail=detail,
                 action=action,
             )
+            break
 
 
 def _run_incremental(trigger: str) -> None:

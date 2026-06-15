@@ -347,3 +347,58 @@ def test_batch_recommendation_does_not_execute_when_disabled(
     assert resp.status_code == 200
     assert calls == []
     assert idx.get_message(mid) is not None
+
+
+def test_batch_recommendation_stops_actions_after_failure(
+    monkeypatch, tmp_path, sample_eml
+):
+    app, db_path = _load_app(monkeypatch, tmp_path)
+    idx = MessageIndex(db_path, account="default")
+    idx.upsert_messages("INBOX", [("1", parse_email(sample_eml), True, False)])
+    mid = stable_id("default", "INBOX", "1")
+
+    import app.main as main
+
+    main.settings.automation.execute_recommendations = True
+    calls = []
+
+    def fake_add_tag(folder, uid, tag):
+        calls.append(("add_tag", folder, uid, tag))
+        raise RuntimeError("label missing")
+
+    def fake_archive(folder, uid, archive_folder):
+        calls.append(("archive", folder, uid, archive_folder))
+
+    monkeypatch.setattr(main.imap, "add_tag_message", fake_add_tag)
+    monkeypatch.setattr(main.imap, "archive_message", fake_archive)
+
+    row = idx.get_message(mid)
+    batch = main.automation_store.create_classification_batch(
+        trigger="test",
+        messages=[row],
+    )
+    request_id = batch["items"][0]["request_id"]
+    client = TestClient(app)
+
+    resp = client.post(
+        f"/automation/classification-batches/{batch['batch_id']}/recommendations",
+        headers={"Authorization": "Bearer automation-token"},
+        json={
+            "recommendations": [
+                {
+                    "request_id": request_id,
+                    "message_id": mid,
+                    "classification": "political",
+                    "confidence": 0.95,
+                    "actions": [
+                        {"type": "add_tag", "tag": "Political"},
+                        {"type": "archive"},
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert resp.status_code == 200
+    assert calls == [("add_tag", "INBOX", "1", "Political")]
+    assert idx.get_message(mid) is not None

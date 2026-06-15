@@ -19,6 +19,10 @@ from imapclient import IMAPClient
 log = logging.getLogger("bott-mail.imap")
 
 
+class ImapMutationError(Exception):
+    """Raised when a write operation fails with useful context."""
+
+
 @dataclass
 class FetchedMessage:
     uid: int
@@ -172,10 +176,38 @@ class ImapClient:
         """Apply a Proton Bridge label by copying the message to its label mailbox."""
         client = self.connect()
         try:
+            destination = self._resolve_label_mailbox(client, tag)
             client.select_folder(folder, readonly=False)
-            client.copy([int(uid)], tag)
+            client.copy([int(uid)], destination)
+        except Exception as exc:  # noqa: BLE001
+            raise ImapMutationError(
+                f"add_tag failed folder={folder!r} uid={uid!r} tag={tag!r}: {exc!r}"
+            ) from exc
         finally:
             try:
                 client.logout()
             except Exception:  # noqa: BLE001
                 pass
+
+    @staticmethod
+    def _resolve_label_mailbox(client: IMAPClient, tag: str) -> str:
+        tag = tag.strip()
+        if not tag:
+            raise ImapMutationError("label tag is empty")
+
+        folders = client.list_folders()
+        names = [str(folder[-1]) for folder in folders]
+        candidates = [
+            tag,
+            f"Labels/{tag}",
+            f"Label/{tag}",
+            f"Folders/{tag}",
+        ]
+        lowered = {name.lower(): name for name in names}
+        for candidate in candidates:
+            exact = lowered.get(candidate.lower())
+            if exact:
+                return exact
+        raise ImapMutationError(
+            f"label mailbox not found for tag={tag!r}; available={names!r}"
+        )
