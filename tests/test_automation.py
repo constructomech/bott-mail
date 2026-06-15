@@ -23,6 +23,28 @@ def test_validate_recommendation_accepts_allowed_dry_run():
     assert result.rejected_reasons == []
 
 
+def test_validate_recommendation_accepts_prompt_classifications():
+    for classification in [
+        "political",
+        "loyalty promotion",
+        "purchase confirmation",
+        "shipping notification",
+        "travel",
+        "school",
+        "other",
+        "uncertain",
+    ]:
+        result = validate_recommendation(
+            message_id="m1",
+            recommendation_message_id="m1",
+            classification=classification,
+            confidence=0.9,
+            actions=[],
+            safety=SafetyConfig(),
+        )
+        assert result.accepted is True, classification
+
+
 def test_validate_recommendation_rejects_bad_actions():
     result = validate_recommendation(
         message_id="m1",

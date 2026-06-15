@@ -24,7 +24,7 @@ ALLOWED_ACTIONS = {"archive", "unsubscribe", "add_tag"}
 KNOWN_CLASSIFICATIONS = {
     "political",
     "loyalty promotion",
-    "order confirmation",
+    "purchase confirmation",
     "shipping notification",
     "travel",
     "school",
