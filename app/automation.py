@@ -1,4 +1,4 @@
-"""Dry-run automation recommendation validation and storage."""
+"""Automation recommendation validation and storage."""
 from __future__ import annotations
 
 import json
@@ -130,7 +130,6 @@ class AutomationStore:
             "message_id": message_id,
             "accepted": validation.accepted,
             "rejected_reasons": validation.rejected_reasons,
-            "dry_run": True,
             "created_at": created_at,
         }
 

@@ -120,7 +120,6 @@ class AutomationRecommendationResponse(BaseModel):
     message_id: str
     accepted: bool
     rejected_reasons: list[str] = Field(default_factory=list)
-    dry_run: bool = True
     created_at: str
 
 

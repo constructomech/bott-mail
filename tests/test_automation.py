@@ -9,7 +9,7 @@ from app.index import MessageIndex, stable_id
 from app.mail_parse import parse_email
 
 
-def test_validate_recommendation_accepts_allowed_dry_run():
+def test_validate_recommendation_accepts_allowed_actions():
     result = validate_recommendation(
         message_id="m1",
         recommendation_message_id="m1",

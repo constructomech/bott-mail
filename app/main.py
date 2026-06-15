@@ -565,7 +565,7 @@ async def record_classification_batch_recommendations(
         audit.record(
             actor=_ACTOR,
             token_id=auth_ctx.token_id,
-            operation="automation_recommendation_dry_run",
+            operation="automation_recommendation_recorded",
             batch_id=batch_id,
             request_id=item.request_id,
             message_id=message_id,
