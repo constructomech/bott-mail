@@ -20,8 +20,17 @@ _MIGRATIONS_DIR = os.path.join(
 )
 
 
-ALLOWED_ACTIONS = {"archive", "unsubscribe", "add_tag", "slack_notify"}
-KNOWN_CLASSIFICATIONS = {"political", "not_political", "travel", "deadline", "school", "uncertain", "other"}
+ALLOWED_ACTIONS = {"archive", "unsubscribe", "add_tag"}
+KNOWN_CLASSIFICATIONS = {
+    "political",
+    "loyalty promotion",
+    "order confirmation",
+    "shipping notification",
+    "travel",
+    "school",
+    "uncertain",
+    "other",
+}
 
 
 def _now_iso() -> str:
