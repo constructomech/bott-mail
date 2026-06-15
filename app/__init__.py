@@ -1,3 +1,3 @@
 """bott-mail-service — Proton Mail bridge for Bott/Hermes."""
 
-__version__ = "0.6.2"
+__version__ = "0.6.3"

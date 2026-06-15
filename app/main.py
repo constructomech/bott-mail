@@ -170,7 +170,18 @@ def _execute_recommendation_actions(
                 message_id=message_id,
                 action_type=action_type,
                 status="skipped",
-                detail="action not enabled for autonomous execution",
+                detail=f"action not enabled for autonomous execution: {action}",
+            )
+            audit.record(
+                actor="automation",
+                token_id="internal",
+                operation="automation_action_skipped",
+                batch_id=batch_id,
+                request_id=request_id,
+                message_id=message_id,
+                action_type=action_type,
+                action=action,
+                reason="action not enabled for autonomous execution",
             )
             continue
 
@@ -184,6 +195,17 @@ def _execute_recommendation_actions(
                 action_type=action_type,
                 status="skipped",
                 detail="message no longer exists in index",
+            )
+            audit.record(
+                actor="automation",
+                token_id="internal",
+                operation="automation_action_skipped",
+                batch_id=batch_id,
+                request_id=request_id,
+                message_id=message_id,
+                action_type=action_type,
+                action=action,
+                reason="message no longer exists in index",
             )
             continue
 
@@ -212,6 +234,7 @@ def _execute_recommendation_actions(
                     message_id=message_id,
                     action_type=action_type,
                     tag=tag,
+                    action=action,
                 )
             elif action_type == "archive":
                 assert_archive_allowed(settings.safety)
@@ -237,6 +260,7 @@ def _execute_recommendation_actions(
                     message_id=message_id,
                     action_type=action_type,
                     archive_folder=archive_folder,
+                    action=action,
                 )
             else:
                 automation_store.record_execution(
@@ -246,7 +270,18 @@ def _execute_recommendation_actions(
                     message_id=message_id,
                     action_type=action_type,
                     status="skipped",
-                    detail="action type is not executable",
+                    detail=f"action type is not executable: {action}",
+                )
+                audit.record(
+                    actor="automation",
+                    token_id="internal",
+                    operation="automation_action_skipped",
+                    batch_id=batch_id,
+                    request_id=request_id,
+                    message_id=message_id,
+                    action_type=action_type,
+                    action=action,
+                    reason="action type is not executable",
                 )
         except Exception as exc:  # noqa: BLE001
             automation_store.record_execution(
@@ -267,6 +302,7 @@ def _execute_recommendation_actions(
                 message_id=message_id,
                 action_type=action_type,
                 error=type(exc).__name__,
+                action=action,
             )
 
 
@@ -536,6 +572,7 @@ async def record_classification_batch_recommendations(
             accepted=validation.accepted,
             rejected_reasons=validation.rejected_reasons,
             action_count=len(actions),
+            actions=actions,
         )
 
     automation_store.complete_batch_items(batch_id, completed_request_ids)

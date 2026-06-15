@@ -23,26 +23,40 @@ def test_validate_recommendation_accepts_allowed_dry_run():
     assert result.rejected_reasons == []
 
 
-def test_validate_recommendation_accepts_prompt_classifications():
-    for classification in [
-        "political",
-        "loyalty promotion",
-        "purchase confirmation",
-        "shipping notification",
-        "travel",
-        "school",
-        "other",
-        "uncertain",
-    ]:
-        result = validate_recommendation(
-            message_id="m1",
-            recommendation_message_id="m1",
-            classification=classification,
-            confidence=0.9,
-            actions=[],
-            safety=SafetyConfig(),
-        )
-        assert result.accepted is True, classification
+def test_validate_recommendation_treats_classification_as_metadata():
+    result = validate_recommendation(
+        message_id="m1",
+        recommendation_message_id="m1",
+        classification="new label hermes invents later",
+        confidence=0.9,
+        actions=[],
+        safety=SafetyConfig(),
+    )
+
+    assert result.accepted is True
+    assert result.rejected_reasons == []
+
+
+def test_validate_recommendation_rejects_empty_or_huge_classification():
+    empty = validate_recommendation(
+        message_id="m1",
+        recommendation_message_id="m1",
+        classification=" ",
+        confidence=0.9,
+        actions=[],
+        safety=SafetyConfig(),
+    )
+    huge = validate_recommendation(
+        message_id="m1",
+        recommendation_message_id="m1",
+        classification="x" * 101,
+        confidence=0.9,
+        actions=[],
+        safety=SafetyConfig(),
+    )
+
+    assert "classification is required" in empty.rejected_reasons
+    assert "classification is too long" in huge.rejected_reasons
 
 
 def test_validate_recommendation_rejects_bad_actions():
@@ -57,7 +71,6 @@ def test_validate_recommendation_rejects_bad_actions():
 
     assert result.accepted is False
     assert "recommendation message_id does not match request path" in result.rejected_reasons
-    assert "unknown classification" in result.rejected_reasons
     assert "confidence must be between 0 and 1" in result.rejected_reasons
     assert "unknown action: delete" in result.rejected_reasons
     assert "archive action disabled by safety.allow_archive=false" in result.rejected_reasons

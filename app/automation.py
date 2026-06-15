@@ -21,16 +21,6 @@ _MIGRATIONS_DIR = os.path.join(
 
 
 ALLOWED_ACTIONS = {"archive", "unsubscribe", "add_tag"}
-KNOWN_CLASSIFICATIONS = {
-    "political",
-    "loyalty promotion",
-    "purchase confirmation",
-    "shipping notification",
-    "travel",
-    "school",
-    "uncertain",
-    "other",
-}
 
 
 def _now_iso() -> str:
@@ -57,8 +47,10 @@ def validate_recommendation(
     if recommendation_message_id != message_id:
         reasons.append("recommendation message_id does not match request path")
 
-    if classification not in KNOWN_CLASSIFICATIONS:
-        reasons.append("unknown classification")
+    if not classification.strip():
+        reasons.append("classification is required")
+    elif len(classification) > 100:
+        reasons.append("classification is too long")
 
     if confidence < 0 or confidence > 1:
         reasons.append("confidence must be between 0 and 1")
